@@ -484,7 +484,7 @@ any_signal = any(
 )
 
 st.sidebar.title("Navigation")
-st.sidebar.caption("Theme clair bleu et blanc. La page active est marquee par une ombre.")
+st.sidebar.caption("")
 page = st.sidebar.radio(
     "Choisir une vue:",
     (
@@ -496,56 +496,98 @@ page = st.sidebar.radio(
     label_visibility="visible",
 )
 
-st.title("Dashboard ML — Presentation alignee sur votre code")
-st.caption(
-    "Les blocs de la vue dynamique apparaissent si les memes idees "
-    "(competences, classification, clustering, PCA) sont presentes dans vos notebooks/scripts, "
-    "puis sexecutent sur les CSV du dossier comme dans lapplication."
-)
+st.title("Dashboard ML")
 
 df_jobs = load_csv(DATASET_JOBS)
 df_hr = load_csv(DATASET_HR)
 
 if page.startswith("Vue dynamique"):
-    st.subheader("Detection dans vos fichiers (hors `app.py` et environnement virtuel)")
-    det = pd.DataFrame(
-        [
-            {"Analyse": "Extraction / competences & texte", "Detectee": signals["skills_extraction"]},
-            {"Analyse": "Classification / comparaison de modeles", "Detectee": signals["classification"]},
-            {"Analyse": "Clustering (KMeans, Agglomeratif, ...)", "Detectee": signals["clustering"]},
-            {"Analyse": "PCA / reduction de dimension", "Detectee": signals["pca"]},
-        ]
-    )
-    st.dataframe(det, width='stretch', hide_index=True)
+    # Vertical cards explaining the three objectives
+    def _card_html(title: str, subtitle: str, body_lines: list[str], accent_color: str = "#2563eb"):
+        body = "".join(f"<li style=\"margin-bottom:14px;line-height:1.8;font-size:16px\">{line}</li>" for line in body_lines)
+        return f"""
+        <div style="
+            background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+            border-left: 6px solid {accent_color};
+            border-radius: 16px;
+            padding: 36px;
+            margin-bottom: 28px;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
+            transition: all 0.3s ease;
+        ">
+          <h3 style="margin: 0 0 8px 0; color: {accent_color}; font-size: 24px; font-weight: 700;">{title}</h3>
+          <div style=\"color: #1e40af; margin-bottom: 22px; font-size: 16px; font-weight: 600; letter-spacing: 0.5px;\">{subtitle}</div>
+          <ul style=\"margin: 16px 0 0 32px; padding: 0; color: #334155; font-size: 15px; list-style-type: disc;\">
+            {body}
+          </ul>
+        </div>
+        """
 
-    if not any_signal:
-        st.warning(
-            "Aucun signal ML clair detecte dans les sources. "
-            "Verifiez que vos notebooks `.ipynb` sont bien dans ce dossier. "
-            "Affichage de secours : tout ce qui est possible avec les CSV presents."
-        )
+    # Display three objective cards horizontally
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown(_card_html(
+            "Extraction automatique des competences",
+            "Extraction intelligente du texte",
+            [
+                "Developper un module NLP pour analyser descriptions",
+                "Nettoyage et normalisation du texte",
+                "Detection des competences cles mentionnees",
+                "Classification: techniques / manageriales / soft skills",
+                "Sortie: liste structuree et exploitable",
+            ],
+            accent_color="#2563eb"
+        ), unsafe_allow_html=True)
 
-    show_skills = signals["skills_extraction"] or (not any_signal and df_jobs is not None)
-    show_clf = signals["classification"] or (not any_signal and df_jobs is not None)
-    show_cluster = (signals["clustering"] or signals["pca"]) or (not any_signal and df_hr is not None)
+    with col2:
+        st.markdown(_card_html(
+            "Classification automatique des formations",
+            "Categoriser et qualifier les activites",
+            [
+                "Construire un modele de classification supervisee",
+                "Categories: techniques / manageriales / transversales",
+                "Vectorisation et selection de features",
+                "Evaluation multi-modele avec comparaison",
+                "Label standardise pour chaque activite",
+            ],
+            accent_color="#7c3aed"
+        ), unsafe_allow_html=True)
 
-    if show_skills:
-        if df_jobs is None:
-            st.error(f"Fichier introuvable: `{DATASET_JOBS}` (necessaire pour cette section).")
-        else:
-            render_objectif1(df_jobs)
+    with col3:
+        st.markdown(_card_html(
+            "Segmentation intelligente des collaborateurs",
+            "Regrouper par profils et competences",
+            [
+                "Regroupement automatique selon parcours",
+                "Criteres: competences, niveau, activites",
+                "Algorithmes: KMeans, Agglomeratif, PCA",
+                "Reduction de dimension et visualisation",
+                "Profils semantiques et actionables",
+            ],
+            accent_color="#059669"
+        ), unsafe_allow_html=True)
 
-    if show_clf:
-        if df_jobs is None:
-            st.error(f"Fichier introuvable: `{DATASET_JOBS}` (necessaire pour la classification).")
-        else:
-            render_objectif2(df_jobs)
+    st.markdown("---")
 
-    if show_cluster:
-        if df_hr is None:
-            st.error(f"Fichier introuvable: `{DATASET_HR}` (necessaire pour clustering / PCA).")
-        else:
-            render_objectif3(df_hr)
+    # Show dataset previews vertically
+    st.subheader("Datasets utilises")
+    
+    st.markdown("**Dataset 1 — JobsDatasetProcessed**")
+    if df_jobs is None:
+        st.error(f"Fichier introuvable: {DATASET_JOBS}")
+    else:
+        st.write(f"Taille: {df_jobs.shape[0]} lignes × {df_jobs.shape[1]} colonnes")
+        st.dataframe(df_jobs.head(100), width='stretch')
+    
+    st.markdown("**Dataset 2 — Cleaned_HR_Data_Analysis**")
+    if df_hr is None:
+        st.error(f"Fichier introuvable: {DATASET_HR}")
+    else:
+        st.write(f"Taille: {df_hr.shape[0]} lignes × {df_hr.shape[1]} colonnes")
+        st.dataframe(df_hr.head(100), width='stretch')
+
+    st.markdown("---")
 
 elif page.startswith("Objectif 1"):
     if df_jobs is None:
