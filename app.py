@@ -158,7 +158,12 @@ SKIP_DIR_NAMES = {".venv", "venv", "__pycache__", ".git", "node_modules"}
 @st.cache_resource
 def load_spacy_nlp_with_skills():
     """Load spaCy model and configure EntityRuler with skill patterns (matching notebook)."""
-    nlp = spacy.load("en_core_web_sm")
+    try:
+        nlp = spacy.load("en_core_web_sm")
+    except (IOError, OSError):
+        # Fallback if model is not installed
+        st.warning("spaCy model not found. Using keyword-based skill extraction as fallback.")
+        return None
     
     # Remove existing entity_ruler if present
     if "entity_ruler" in nlp.pipe_names:
@@ -265,18 +270,52 @@ def load_spacy_nlp_with_skills():
 
 
 def extract_skills_from_text(text, nlp):
-    """Extract skills using spaCy EntityRuler (matching notebook methodology)."""
+    """Extract skills using spaCy EntityRuler or keyword matching (matching notebook methodology)."""
     if not isinstance(text, str) or len(text.strip()) < 5:
         return {"TECHNICAL_SKILL": [], "MANAGERIAL_SKILL": [], "SOFT_SKILL": []}
     
-    doc = nlp(text[:5000])  # Limit for performance
-    extracted = {"TECHNICAL_SKILL": set(), "MANAGERIAL_SKILL": set(), "SOFT_SKILL": set()}
-    
-    for ent in doc.ents:
-        if ent.label_ in extracted:
-            extracted[ent.label_].add(ent.text.lower().strip())
-    
-    return {k: sorted(v) for k, v in extracted.items()}
+    if nlp is not None:
+        # Use spaCy if available
+        doc = nlp(text[:5000])  # Limit for performance
+        extracted = {"TECHNICAL_SKILL": set(), "MANAGERIAL_SKILL": set(), "SOFT_SKILL": set()}
+        
+        for ent in doc.ents:
+            if ent.label_ in extracted:
+                extracted[ent.label_].add(ent.text.lower().strip())
+        
+        return {k: sorted(v) for k, v in extracted.items()}
+    else:
+        # Fallback to keyword matching if spacy not available
+        text_lower = text.lower()
+        technical_keywords = {
+            "python", "sql", "java", "c++", "c#", "javascript", "aws", "azure", "docker",
+            "kubernetes", "ml", "ai", "data", "api", "linux", "cloud", "etl", "tableau",
+            "tensorflow", "pytorch", "scikit", "react", "angular", "vue", "git", "devops",
+            "excel", "photoshop", "autocad", "networking", "cybersecurity", "microservices", "sap"
+        }
+        managerial_keywords = {
+            "manage", "manager", "lead", "leadership", "project", "strategy", "planning", "budget",
+            "stakeholder", "coordination", "scrum", "agile", "roadmap", "decision", "coaching",
+            "mentoring", "negotiation", "recruitment", "training"
+        }
+        soft_keywords = {
+            "communication", "teamwork", "collaboration", "problem solving", "adaptability", "creativity",
+            "critical thinking", "time management", "presentation", "negotiation", "empathy",
+            "flexibility", "initiative", "customer service", "emotional intelligence", "work ethic", "public speaking"
+        }
+        
+        extracted = {"TECHNICAL_SKILL": set(), "MANAGERIAL_SKILL": set(), "SOFT_SKILL": set()}
+        
+        for word in text_lower.split():
+            word_clean = word.lower().strip(".,!?;:")
+            if word_clean in technical_keywords:
+                extracted["TECHNICAL_SKILL"].add(word_clean)
+            elif word_clean in managerial_keywords:
+                extracted["MANAGERIAL_SKILL"].add(word_clean)
+            elif word_clean in soft_keywords:
+                extracted["SOFT_SKILL"].add(word_clean)
+        
+        return {k: sorted(v) for k, v in extracted.items()}
 
 
 def resolve_dataset_path(path: str) -> str:
