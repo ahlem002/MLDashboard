@@ -733,6 +733,13 @@ def render_objectif1(df_jobs: pd.DataFrame):
         "combined_text",
         "text",
     ])
+    # If no specific text column found, try any object/string column
+    if text_col is None:
+        for col in df_jobs.columns:
+            if df_jobs[col].dtype == "object" or pd.api.types.is_string_dtype(df_jobs[col]):
+                text_col = col
+                break
+    
     skills_col = _first_col(["skills_required", "IT Skills", "Soft Skills", "skills", "Skills"])
     category_col = _first_col(["job_category", "Query", "category", "Job_Category"])
 
@@ -764,149 +771,161 @@ def render_objectif1(df_jobs: pd.DataFrame):
     st.subheader("2. Text Processing + Skill Extraction")
 
     if text_col is None:
-        st.warning("No raw job-description text column detected.")
-        return
+        st.warning("⚠️ No raw job-description text column detected. Available columns: " + str(list(df_jobs.columns)))
+        st.info("Please ensure your dataset has a text/description column.")
+        # Don't return - allow other sections to render with available data
+        skills_df = pd.DataFrame(columns=["row_idx", "skill", "type"])
+    else:
+        try:
+            raw_text = df_jobs[text_col].fillna("").astype(str)
+            clean_text = raw_text.apply(_crisp_clean_text)
 
-    raw_text = df_jobs[text_col].fillna("").astype(str)
-    clean_text = raw_text.apply(_crisp_clean_text)
+            # Load spaCy NLP model with skill patterns (matching notebook)
+            nlp = load_spacy_nlp_with_skills()
+            
+            # Extract skills from clean text using spaCy
+            skill_records = []
+            for idx, text in enumerate(clean_text):
+                if idx < len(clean_text):
+                    try:
+                        skills = extract_skills_from_text(text, nlp)
+                        for skill_type, skill_list in skills.items():
+                            for skill in skill_list:
+                                skill_records.append({"row_idx": idx, "skill": skill, "type": skill_type})
+                    except Exception as e:
+                        st.warning(f"Error extracting skills from row {idx}: {str(e)[:100]}")
+                        continue
 
-    # Load spaCy NLP model with skill patterns (matching notebook)
-    nlp = load_spacy_nlp_with_skills()
-    
-    # Extract skills from clean text using spaCy
-    skill_records = []
-    for idx, text in enumerate(clean_text):
-        if idx < len(clean_text):
-            skills = extract_skills_from_text(text, nlp)
-            for skill_type, skill_list in skills.items():
-                for skill in skill_list:
-                    skill_records.append({"row_idx": idx, "skill": skill, "type": skill_type})
+            skills_df = pd.DataFrame(skill_records)
+        except Exception as e:
+            st.error(f"Error in text processing: {str(e)}")
+            st.info("Continuing with available data...")
+            skills_df = pd.DataFrame(columns=["row_idx", "skill", "type"])
 
-    skills_df = pd.DataFrame(skill_records)
+        sample_idx = int(raw_text.str.len().idxmax()) if (raw_text.str.len() > 0).any() else int(df_jobs.index[0])
+        sample_raw = raw_text.loc[sample_idx]
+        sample_clean = clean_text.loc[sample_idx]
+        sample_skills = skills_df[skills_df["row_idx"] == sample_idx] if not skills_df.empty else pd.DataFrame()
 
-    sample_idx = int(raw_text.str.len().idxmax()) if (raw_text.str.len() > 0).any() else int(df_jobs.index[0])
-    sample_raw = raw_text.loc[sample_idx]
-    sample_clean = clean_text.loc[sample_idx]
-    sample_skills = skills_df[skills_df["row_idx"] == sample_idx] if not skills_df.empty else pd.DataFrame()
-
-    left, right = st.columns(2)
-    with left:
-        st.markdown("**Raw job description**")
-        st.markdown(
-            f"""
-            <div style="background:#ffffff;border:1px solid #dbe8ff;border-radius:14px;padding:16px;min-height:260px;color:#102a43;line-height:1.7;font-size:15px;white-space:pre-wrap;">{sample_raw[:1800]}</div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with right:
-        st.markdown("**Cleaned text + highlighted skills**")
-        st.markdown(
-            f"""
-            <div style="background:#ffffff;border:1px solid #dbe8ff;border-radius:14px;padding:16px;min-height:180px;color:#102a43;line-height:1.7;font-size:15px;white-space:pre-wrap;">{sample_clean[:1200]}</div>
-            """,
-            unsafe_allow_html=True,
-        )
-        if not sample_skills.empty:
-            color_map = {"TECHNICAL_SKILL": "#2563eb", "MANAGERIAL_SKILL": "#7c3aed", "SOFT_SKILL": "#0d9488"}
-            chips = []
-            for _, row in sample_skills.head(20).iterrows():
-                color = color_map.get(row["type"], "#334155")
-                # Display friendly names
-                type_display = row["type"].replace("_SKILL", "").replace("_", " ").title()
-                chips.append(
-                    f"<span style='display:inline-block;margin:4px 6px 0 0;padding:6px 10px;border-radius:999px;background:{color}1A;border:1px solid {color}66;color:{color};font-size:13px;font-weight:700'>{row['skill']} ({type_display})</span>"
-                )
-            st.markdown("".join(chips), unsafe_allow_html=True)
-        else:
-            st.info("No extracted skills found for this sample row.")
+        left, right = st.columns(2)
+        with left:
+            st.markdown("**Raw job description**")
+            st.markdown(
+                f"""
+                <div style="background:#ffffff;border:1px solid #dbe8ff;border-radius:14px;padding:16px;min-height:260px;color:#102a43;line-height:1.7;font-size:15px;white-space:pre-wrap;">{sample_raw[:1800]}</div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with right:
+            st.markdown("**Cleaned text + highlighted skills**")
+            st.markdown(
+                f"""
+                <div style="background:#ffffff;border:1px solid #dbe8ff;border-radius:14px;padding:16px;min-height:180px;color:#102a43;line-height:1.7;font-size:15px;white-space:pre-wrap;">{sample_clean[:1200]}</div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if not sample_skills.empty:
+                color_map = {"TECHNICAL_SKILL": "#2563eb", "MANAGERIAL_SKILL": "#7c3aed", "SOFT_SKILL": "#0d9488"}
+                chips = []
+                for _, row in sample_skills.head(20).iterrows():
+                    color = color_map.get(row["type"], "#334155")
+                    # Display friendly names
+                    type_display = row["type"].replace("_SKILL", "").replace("_", " ").title()
+                    chips.append(
+                        f"<span style='display:inline-block;margin:4px 6px 0 0;padding:6px 10px;border-radius:999px;background:{color}1A;border:1px solid {color}66;color:{color};font-size:13px;font-weight:700'>{row['skill']} ({type_display})</span>"
+                    )
+                st.markdown("".join(chips), unsafe_allow_html=True)
+            else:
+                st.info("No extracted skills found for this sample row.")
 
     st.markdown("---")
     st.subheader("3. Skills Analytics")
 
     if skills_df.empty:
-        st.warning("No skill column detected/extracted for analytics.")
-        return
+        st.warning("⚠️ No skills extracted yet. This may indicate issues with text processing.")
+        st.info("Skipping analytics sections...")
 
-    block_a, block_b, block_c = st.columns(3)
+    if not skills_df.empty:
+        block_a, block_b, block_c = st.columns(3)
 
-    with block_a:
-        st.markdown("**A. Distribution — #skills per job**")
-        counts = skills_df.groupby("row_idx").size().rename("skill_count")
-        all_counts = pd.Series(0, index=df_jobs.index, dtype=int)
-        all_counts.loc[counts.index] = counts.values
-        hist_fig = px.histogram(
-            all_counts,
-            nbins=20,
-            title="#skills per job",
-            labels={"value": "Skills per job", "count": "Jobs"},
-        )
-        hist_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#f0f4f8", height=360)
-        st.plotly_chart(hist_fig, width="stretch")
-
-    with block_b:
-        st.markdown("**B. Top Skills — Top 15 skills (per category)**")
-        skill_type_choice = st.selectbox(
-            "Skill category",
-            ["Technical", "Managerial", "Soft"],
-            key="obj1_skill_type_choice",
-        )
-        # Map friendly names to actual labels
-        label_map = {"Technical": "TECHNICAL_SKILL", "Managerial": "MANAGERIAL_SKILL", "Soft": "SOFT_SKILL"}
-        actual_label = label_map[skill_type_choice]
-        
-        top_skills = (
-            skills_df[skills_df["type"] == actual_label]
-            .groupby("skill")
-            .size()
-            .sort_values(ascending=False)
-            .head(15)
-            .reset_index(name="count")
-        )
-        if top_skills.empty:
-            st.info("No skills in this category.")
-        else:
-            top_fig = px.bar(
-                top_skills.iloc[::-1],
-                x="count",
-                y="skill",
-                orientation="h",
-                title=f"Top 15 {skill_type_choice} skills",
-                color_discrete_sequence=["#2563eb"],
+        with block_a:
+            st.markdown("**A. Distribution — #skills per job**")
+            counts = skills_df.groupby("row_idx").size().rename("skill_count")
+            all_counts = pd.Series(0, index=df_jobs.index, dtype=int)
+            all_counts.loc[counts.index] = counts.values
+            hist_fig = px.histogram(
+                all_counts,
+                nbins=20,
+                title="#skills per job",
+                labels={"value": "Skills per job", "count": "Jobs"},
             )
-            top_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#f0f4f8", height=360)
-            st.plotly_chart(top_fig, width="stretch")
+            hist_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#f0f4f8", height=360)
+            st.plotly_chart(hist_fig, width="stretch")
 
-    with block_c:
-        st.markdown("**C. Global Split**")
-        split_df = (
-            skills_df["type"]
-            .value_counts()
-            .reindex(["TECHNICAL_SKILL", "MANAGERIAL_SKILL", "SOFT_SKILL"], fill_value=0)
-            .reset_index()
-        )
-        split_df.columns = ["Type", "Count"]
-        # Map back to friendly names for display
-        split_df["Type_Display"] = split_df["Type"].map({
-            "TECHNICAL_SKILL": "Technical",
-            "MANAGERIAL_SKILL": "Managerial",
-            "SOFT_SKILL": "Soft"
-        })
-        pie_fig = px.pie(
-            split_df,
-            names="Type_Display",
-            values="Count",
-            title="Technical vs Managerial vs Soft",
-            color="Type_Display",
-            color_discrete_map={"Technical": "#2563eb", "Managerial": "#7c3aed", "Soft": "#0d9488"},
-        )
-        pie_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#f0f4f8", height=360)
-        st.plotly_chart(pie_fig, width="stretch")
+        with block_b:
+            st.markdown("**B. Top Skills — Top 15 skills (per category)**")
+            skill_type_choice = st.selectbox(
+                "Skill category",
+                ["Technical", "Managerial", "Soft"],
+                key="obj1_skill_type_choice",
+            )
+            # Map friendly names to actual labels
+            label_map = {"Technical": "TECHNICAL_SKILL", "Managerial": "MANAGERIAL_SKILL", "Soft": "SOFT_SKILL"}
+            actual_label = label_map[skill_type_choice]
+            
+            top_skills = (
+                skills_df[skills_df["type"] == actual_label]
+                .groupby("skill")
+                .size()
+                .sort_values(ascending=False)
+                .head(15)
+                .reset_index(name="count")
+            )
+            if top_skills.empty:
+                st.info("No skills in this category.")
+            else:
+                top_fig = px.bar(
+                    top_skills.iloc[::-1],
+                    x="count",
+                    y="skill",
+                    orientation="h",
+                    title=f"Top 15 {skill_type_choice} skills",
+                    color_discrete_sequence=["#2563eb"],
+                )
+                top_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#f0f4f8", height=360)
+                st.plotly_chart(top_fig, width="stretch")
+
+        with block_c:
+            st.markdown("**C. Global Split**")
+            split_df = (
+                skills_df["type"]
+                .value_counts()
+                .reindex(["TECHNICAL_SKILL", "MANAGERIAL_SKILL", "SOFT_SKILL"], fill_value=0)
+                .reset_index()
+            )
+            split_df.columns = ["Type", "Count"]
+            # Map back to friendly names for display
+            split_df["Type_Display"] = split_df["Type"].map({
+                "TECHNICAL_SKILL": "Technical",
+                "MANAGERIAL_SKILL": "Managerial",
+                "SOFT_SKILL": "Soft"
+            })
+            pie_fig = px.pie(
+                split_df,
+                names="Type_Display",
+                values="Count",
+                title="Technical vs Managerial vs Soft",
+                color="Type_Display",
+                color_discrete_map={"Technical": "#2563eb", "Managerial": "#7c3aed", "Soft": "#0d9488"},
+            )
+            pie_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#f0f4f8", height=360)
+            st.plotly_chart(pie_fig, width="stretch")
 
     st.markdown("---")
     st.subheader("4. Model Training + Benchmark")
 
-    if clean_text is None or len(clean_text) == 0:
-        st.warning("Not enough data for model training.")
+    if text_col is None or clean_text is None or len(clean_text) == 0:
+        st.warning("⚠️ Not enough text data for model training.")
     else:
         from sklearn.model_selection import train_test_split
         from sklearn.neighbors import KNeighborsClassifier
@@ -1029,15 +1048,16 @@ def render_objectif1(df_jobs: pd.DataFrame):
     st.markdown("---")
     st.subheader("5. Output / Results Table")
 
-    if skills_col:
+    if not skills_df.empty:
         output_rows = []
         for idx, row in df_jobs.iterrows():
-            title = row.get(text_col, "N/A") if text_col else "N/A"
+            title = str(row.get(text_col, "N/A")) if text_col and text_col in row else "N/A"
             title_short = str(title)[:60] if title != "N/A" else "N/A"
             skills_in_row = skills_df[skills_df["row_idx"] == idx]
-            tech_skills = ", ".join(skills_in_row[skills_in_row["type"] == "Technical"]["skill"].unique())
-            mgr_skills = ", ".join(skills_in_row[skills_in_row["type"] == "Managerial"]["skill"].unique())
-            soft_skills = ", ".join(skills_in_row[skills_in_row["type"] == "Soft"]["skill"].unique())
+            # Fix: Use correct skill type labels (TECHNICAL_SKILL, not "Technical")
+            tech_skills = ", ".join(skills_in_row[skills_in_row["type"] == "TECHNICAL_SKILL"]["skill"].unique())
+            mgr_skills = ", ".join(skills_in_row[skills_in_row["type"] == "MANAGERIAL_SKILL"]["skill"].unique())
+            soft_skills = ", ".join(skills_in_row[skills_in_row["type"] == "SOFT_SKILL"]["skill"].unique())
             total_skills = len(skills_in_row)
             output_rows.append({
                 "Job Title": title_short,
@@ -1047,18 +1067,21 @@ def render_objectif1(df_jobs: pd.DataFrame):
                 "Total Skills": total_skills,
             })
 
-        output_df = pd.DataFrame(output_rows).head(1000)
-        st.dataframe(output_df, width="stretch", hide_index=True)
+        if output_rows:
+            output_df = pd.DataFrame(output_rows).head(1000)
+            st.dataframe(output_df, width="stretch", hide_index=True)
 
-        csv_buffer = output_df.to_csv(index=False)
-        st.download_button(
-            label="⬇️ Export CSV",
-            data=csv_buffer,
-            file_name="objectif1_skills_analysis.csv",
-            mime="text/csv",
-        )
+            csv_buffer = output_df.to_csv(index=False)
+            st.download_button(
+                label="⬇️ Export CSV",
+                data=csv_buffer,
+                file_name="objectif1_skills_analysis.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("No skills data available to display.")
     else:
-        st.info("No skills column detected for building the output table.")
+        st.info("No skills extracted. Check the Text Processing section above for errors.")
 
 
 def render_objectif2():
@@ -1190,11 +1213,19 @@ def render_objectif2():
     with c2:
         st.markdown(_text_card("After cleaning", sample_clean, "#059669"), unsafe_allow_html=True)
 
+    # Calculate raw tokens (all tokens including stop words)
     raw_tokens_per_doc = working_df["raw_text"].str.lower().str.findall(r"\b[a-zA-Z]{2,}\b").apply(len)
-    clean_tokens_per_doc = working_df["clean_text"].str.lower().str.findall(r"\b[a-zA-Z]{2,}\b").apply(len)
+    
+    # Calculate clean tokens (excluding stop words to show real cleaning impact)
+    def count_tokens_without_stopwords(text):
+        tokens = re.findall(r"\b[a-zA-Z]{2,}\b", text.lower())
+        return len([t for t in tokens if t not in ENGLISH_STOP_WORDS])
+    
+    clean_tokens_per_doc = working_df["clean_text"].apply(count_tokens_without_stopwords)
+    
     token_metrics = st.columns(4)
     token_metrics[0].metric("Raw tokens / doc", f"{raw_tokens_per_doc.mean():.1f}")
-    token_metrics[1].metric("Clean tokens / doc", f"{clean_tokens_per_doc.mean():.1f}")
+    token_metrics[1].metric("Clean tokens / doc (excl. stopwords)", f"{clean_tokens_per_doc.mean():.1f}")
     word_pattern = r"\b[a-zA-Z]{2,}\b"
 
     raw_text_all = " ".join(working_df["raw_text"].str.lower().tolist())
@@ -1204,11 +1235,14 @@ def render_objectif2():
      "Unique raw words",
       f"{unique_raw_words:,}",
     )
-    word_pattern = r"\b[a-zA-Z]{2,}\b"
+    
+    # Unique clean words: excluding stop words to show real cleaning impact
     clean_text_all = " ".join(working_df["clean_text"].str.lower().tolist())
-    unique_clean_words = len(set(re.findall(word_pattern, clean_text_all)))
+    all_clean_words = re.findall(word_pattern, clean_text_all)
+    unique_clean_words = len(set([w for w in all_clean_words if w not in ENGLISH_STOP_WORDS]))
+    
     token_metrics[3].metric(
-    "Unique cleaned words",
+    "Unique clean words (excl. stopwords)",
     f"{unique_clean_words:,}",
     )
    
