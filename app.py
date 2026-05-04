@@ -21,8 +21,6 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.svm import SVC
 from sklearn.utils import resample
 
-import spacy
-
 
 st.set_page_config(layout="wide", page_title="Dashboard ML - Objectifs")
 
@@ -158,6 +156,8 @@ SKIP_DIR_NAMES = {".venv", "venv", "__pycache__", ".git", "node_modules"}
 @st.cache_resource
 def load_spacy_nlp_with_skills():
     """Load spaCy model and configure EntityRuler with skill patterns (matching notebook)."""
+    import spacy
+
     try:
         nlp = spacy.load("en_core_web_sm")
     except (IOError, OSError):
@@ -464,61 +464,6 @@ def _read_notebook_sources(path: Path) -> str:
     return "\n".join(parts)
 
 
-def collect_project_code_text(root: Path) -> tuple[str, list[str]]:
-    """Aggregate .py / .ipynb sources for signal detection (excludes dashboard + venv)."""
-    chunks: list[str] = []
-    rel_files: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIR_NAMES]
-        for name in filenames:
-            if name in SKIP_SCAN_NAMES:
-                continue
-            p = Path(dirpath) / name
-            rel = str(p.relative_to(root))
-            try:
-                if name.endswith(".py"):
-                    text = p.read_text(encoding="utf-8", errors="ignore")
-                    chunks.append(text)
-                    rel_files.append(rel)
-                elif name.endswith(".ipynb"):
-                    text = _read_notebook_sources(p)
-                    if text.strip():
-                        chunks.append(text)
-                        rel_files.append(rel)
-            except OSError:
-                continue
-    return "\n\n".join(chunks), rel_files
-
-
-@st.cache_data
-def scan_ml_code_signals(_root_key: str) -> dict:
-    """Infer which ML blocks exist in user notebooks/scripts (not app.py)."""
-    root = Path(_root_key)
-    blob, files = collect_project_code_text(root)
-    low = blob.lower()
-    return {
-        "files_scanned": files,
-        "skills_extraction": bool(
-            re.search(
-                r"it skills|soft skills|skill_frequency|extract_skills|competences|"
-                r"technical_skills|tfidfvectorizer|skill",
-                low,
-            )
-        ),
-        "classification": bool(
-            re.search(
-                r"confusion_matrix|randomforest|logisticregression|kneighbors|"
-                r"multinomialnb|accuracy_score|classification_report|train_test_split",
-                low,
-            )
-        ),
-        "clustering": bool(
-            re.search(r"kmeans|agglomerativeclustering|silhouette_score|clustering", low)
-        ),
-        "pca": bool(re.search(r"\bpca\b|sklearn\.decomposition", low)),
-    }
-
-
 def parse_skill_list(value):
     if pd.isna(value):
         return []
@@ -716,6 +661,57 @@ def run_clustering(df_hr: pd.DataFrame):
     return sil_df, out, profile, x_pca, explained, best_name, best_k
 
 
+@st.cache_data(show_spinner=False)
+def prepare_objectif1_analysis(df_jobs: pd.DataFrame, text_col: str | None):
+    empty_skills = pd.DataFrame(columns=["row_idx", "skill", "type"])
+    result = {
+        "raw_text": None,
+        "clean_text": None,
+        "skills_df": empty_skills,
+        "sample_raw": "",
+        "sample_clean": "",
+        "sample_skills": empty_skills,
+        "error": None,
+    }
+
+    if text_col is None or text_col not in df_jobs.columns:
+        return result
+
+    try:
+        raw_text = df_jobs[text_col].fillna("").astype(str)
+        clean_text = raw_text.apply(_crisp_clean_text)
+
+        nlp = load_spacy_nlp_with_skills()
+        skill_records = []
+        for idx, text in enumerate(clean_text):
+            try:
+                skills = extract_skills_from_text(text, nlp)
+            except Exception:
+                continue
+            for skill_type, skill_list in skills.items():
+                for skill in skill_list:
+                    skill_records.append({"row_idx": idx, "skill": skill, "type": skill_type})
+
+        skills_df = pd.DataFrame(skill_records) if skill_records else empty_skills.copy()
+        sample_idx = int(raw_text.str.len().idxmax()) if (raw_text.str.len() > 0).any() else int(df_jobs.index[0])
+        sample_skills = skills_df[skills_df["row_idx"] == sample_idx] if not skills_df.empty else empty_skills.copy()
+
+        result.update(
+            {
+                "raw_text": raw_text,
+                "clean_text": clean_text,
+                "skills_df": skills_df,
+                "sample_raw": raw_text.loc[sample_idx],
+                "sample_clean": clean_text.loc[sample_idx],
+                "sample_skills": sample_skills,
+            }
+        )
+    except Exception as exc:
+        result["error"] = str(exc)
+
+    return result
+
+
 def render_objectif1(df_jobs: pd.DataFrame):
     st.header("Objectif 1 — Dataset Overview, Text Processing, Skills Analytics")
 
@@ -747,6 +743,13 @@ def render_objectif1(df_jobs: pd.DataFrame):
     total_cols = df_jobs.shape[1]
     missing_values = int(df_jobs.isna().sum().sum())
     n_categories = int(df_jobs[category_col].nunique()) if category_col else 0
+    analysis = prepare_objectif1_analysis(df_jobs, text_col)
+    raw_text = analysis["raw_text"]
+    clean_text = analysis["clean_text"]
+    skills_df = analysis["skills_df"]
+    sample_raw = analysis["sample_raw"]
+    sample_clean = analysis["sample_clean"]
+    sample_skills = analysis["sample_skills"]
 
     def _metric_card(title: str, value: str, accent: str) -> str:
         return f"""
@@ -773,70 +776,45 @@ def render_objectif1(df_jobs: pd.DataFrame):
     if text_col is None:
         st.warning("⚠️ No raw job-description text column detected. Available columns: " + str(list(df_jobs.columns)))
         st.info("Please ensure your dataset has a text/description column.")
-        # Don't return - allow other sections to render with available data
-        skills_df = pd.DataFrame(columns=["row_idx", "skill", "type"])
-    else:
-        try:
-            raw_text = df_jobs[text_col].fillna("").astype(str)
-            clean_text = raw_text.apply(_crisp_clean_text)
+        return
 
-            # Load spaCy NLP model with skill patterns (matching notebook)
-            nlp = load_spacy_nlp_with_skills()
-            
-            # Extract skills from clean text using spaCy
-            skill_records = []
-            for idx, text in enumerate(clean_text):
-                if idx < len(clean_text):
-                    try:
-                        skills = extract_skills_from_text(text, nlp)
-                        for skill_type, skill_list in skills.items():
-                            for skill in skill_list:
-                                skill_records.append({"row_idx": idx, "skill": skill, "type": skill_type})
-                    except Exception as e:
-                        st.warning(f"Error extracting skills from row {idx}: {str(e)[:100]}")
-                        continue
+    if analysis["error"]:
+        st.warning(f"Text processing used cached fallback with an issue: {analysis['error']}")
 
-            skills_df = pd.DataFrame(skill_records)
-        except Exception as e:
-            st.error(f"Error in text processing: {str(e)}")
-            st.info("Continuing with available data...")
-            skills_df = pd.DataFrame(columns=["row_idx", "skill", "type"])
+    if not isinstance(raw_text, pd.Series) or not isinstance(clean_text, pd.Series):
+        st.warning("No text available for deeper analysis.")
+        return
 
-        sample_idx = int(raw_text.str.len().idxmax()) if (raw_text.str.len() > 0).any() else int(df_jobs.index[0])
-        sample_raw = raw_text.loc[sample_idx]
-        sample_clean = clean_text.loc[sample_idx]
-        sample_skills = skills_df[skills_df["row_idx"] == sample_idx] if not skills_df.empty else pd.DataFrame()
-
-        left, right = st.columns(2)
-        with left:
-            st.markdown("**Raw job description**")
-            st.markdown(
-                f"""
-                <div style="background:#ffffff;border:1px solid #dbe8ff;border-radius:14px;padding:16px;min-height:260px;color:#102a43;line-height:1.7;font-size:15px;white-space:pre-wrap;">{sample_raw[:1800]}</div>
-                """,
-                unsafe_allow_html=True,
-            )
-        with right:
-            st.markdown("**Cleaned text + highlighted skills**")
-            st.markdown(
-                f"""
-                <div style="background:#ffffff;border:1px solid #dbe8ff;border-radius:14px;padding:16px;min-height:180px;color:#102a43;line-height:1.7;font-size:15px;white-space:pre-wrap;">{sample_clean[:1200]}</div>
-                """,
-                unsafe_allow_html=True,
-            )
-            if not sample_skills.empty:
-                color_map = {"TECHNICAL_SKILL": "#2563eb", "MANAGERIAL_SKILL": "#7c3aed", "SOFT_SKILL": "#0d9488"}
-                chips = []
-                for _, row in sample_skills.head(20).iterrows():
-                    color = color_map.get(row["type"], "#334155")
-                    # Display friendly names
-                    type_display = row["type"].replace("_SKILL", "").replace("_", " ").title()
-                    chips.append(
-                        f"<span style='display:inline-block;margin:4px 6px 0 0;padding:6px 10px;border-radius:999px;background:{color}1A;border:1px solid {color}66;color:{color};font-size:13px;font-weight:700'>{row['skill']} ({type_display})</span>"
-                    )
-                st.markdown("".join(chips), unsafe_allow_html=True)
-            else:
-                st.info("No extracted skills found for this sample row.")
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**Raw job description**")
+        st.markdown(
+            f"""
+            <div style="background:#ffffff;border:1px solid #dbe8ff;border-radius:14px;padding:16px;min-height:260px;color:#102a43;line-height:1.7;font-size:15px;white-space:pre-wrap;">{sample_raw[:1800]}</div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with right:
+        st.markdown("**Cleaned text + highlighted skills**")
+        st.markdown(
+            f"""
+            <div style="background:#ffffff;border:1px solid #dbe8ff;border-radius:14px;padding:16px;min-height:180px;color:#102a43;line-height:1.7;font-size:15px;white-space:pre-wrap;">{sample_clean[:1200]}</div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if not sample_skills.empty:
+            color_map = {"TECHNICAL_SKILL": "#2563eb", "MANAGERIAL_SKILL": "#7c3aed", "SOFT_SKILL": "#0d9488"}
+            chips = []
+            for _, row in sample_skills.head(20).iterrows():
+                color = color_map.get(row["type"], "#334155")
+                # Display friendly names
+                type_display = row["type"].replace("_SKILL", "").replace("_", " ").title()
+                chips.append(
+                    f"<span style='display:inline-block;margin:4px 6px 0 0;padding:6px 10px;border-radius:999px;background:{color}1A;border:1px solid {color}66;color:{color};font-size:13px;font-weight:700'>{row['skill']} ({type_display})</span>"
+                )
+            st.markdown("".join(chips), unsafe_allow_html=True)
+        else:
+            st.info("No extracted skills found for this sample row.")
 
     st.markdown("---")
     st.subheader("3. Skills Analytics")
@@ -1455,12 +1433,6 @@ def render_objectif3(df_hr: pd.DataFrame):
     st.subheader("Profil moyen par cluster")
     st.dataframe(profile, width='stretch')
 
-
-signals = scan_ml_code_signals(str(PROJECT_ROOT))
-any_signal = any(
-    signals[k]
-    for k in ("skills_extraction", "classification", "clustering", "pca")
-)
 
 st.sidebar.title("Navigation")
 st.sidebar.caption("")
