@@ -3,7 +3,7 @@ import json
 import os
 import re
 from pathlib import Path
-
+from objectif3_page import render_objectif3_page
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -1195,14 +1195,23 @@ def render_objectif2():
     token_metrics = st.columns(4)
     token_metrics[0].metric("Raw tokens / doc", f"{raw_tokens_per_doc.mean():.1f}")
     token_metrics[1].metric("Clean tokens / doc", f"{clean_tokens_per_doc.mean():.1f}")
+    word_pattern = r"\b[a-zA-Z]{2,}\b"
+
+    raw_text_all = " ".join(working_df["raw_text"].str.lower().tolist())
+    unique_raw_words = len(set(re.findall(word_pattern, raw_text_all)))
+
     token_metrics[2].metric(
-        "Unique raw words",
-        f"{len(set(re.findall(r'\b[a-zA-Z]{2,}\b', ' '.join(working_df['raw_text'].str.lower().tolist())))):,}",
+     "Unique raw words",
+      f"{unique_raw_words:,}",
     )
+    word_pattern = r"\b[a-zA-Z]{2,}\b"
+    clean_text_all = " ".join(working_df["clean_text"].str.lower().tolist())
+    unique_clean_words = len(set(re.findall(word_pattern, clean_text_all)))
     token_metrics[3].metric(
-        "Unique cleaned words",
-        f"{len(set(re.findall(r'\b[a-zA-Z]{2,}\b', ' '.join(working_df['clean_text'].str.lower().tolist())))):,}",
+    "Unique cleaned words",
+    f"{unique_clean_words:,}",
     )
+   
 
     cleaned_tokens = [
         token
@@ -1554,4 +1563,4 @@ elif page.startswith("Objectif 3"):
     if df_hr is None:
         st.error(f"Fichier introuvable: {DATASET_HR}")
     else:
-        render_objectif3(df_hr)
+        render_objectif3_page(df_hr)
